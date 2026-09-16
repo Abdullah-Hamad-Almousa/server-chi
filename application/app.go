@@ -3,31 +3,79 @@ package application
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"time"
+
+	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 )
 
 type App struct {
 	router http.Handler
+	rdb    *redis.Client
 }
 
 func New() *App {
+
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
+	addr := os.Getenv("APP_ADDR")
+	user := os.Getenv("REDIS_USERNAME")
+	pass := os.Getenv("REDIS_PASSWORD")
+
 	app := &App{
 		router: loadRouter(),
+		rdb: redis.NewClient(&redis.Options{
+			Addr:     addr,
+			Username: user,
+			Password: pass,
+		}),
 	}
 
 	return app
 }
 
-func (app *App) Start(ctx context.Context) error {
+func (a *App) Start(ctx context.Context) error {
 
 	server := http.Server{
 		Addr:    ":3000",
-		Handler: app.router,
-	}
-	err := server.ListenAndServe()
-	if err != nil {
-		fmt.Errorf("Error starting server: %w", err)
+		Handler: a.router,
 	}
 
-	return nil
+	err := a.rdb.Ping(ctx).Err()
+	if err != nil {
+		return fmt.Errorf("Failed to connect with redis: %w", err)
+	}
+
+	defer func() {
+		if err := a.rdb.Close(); err != nil {
+			fmt.Println("Failed to close redis", err)
+		}
+	}()
+
+	fmt.Println("Starting server...")
+
+	ch := make(chan error, 1)
+
+	go func() {
+		err = server.ListenAndServe()
+		if err != nil {
+			ch <- fmt.Errorf("Failed to start server: %w", err)
+		}
+		close(ch)
+	}()
+
+	select {
+	case err = <-ch:
+		return err
+	case <-ctx.Done():
+		timeout, cancel := context.WithTimeout(context.Background(), time.Second*10)
+		defer cancel()
+		return server.Shutdown(timeout)
+	}
 }
