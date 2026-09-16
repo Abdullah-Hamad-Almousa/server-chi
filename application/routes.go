@@ -19,7 +19,7 @@ func loadRouter() *chi.Mux {
 
 	router.Route("/orders", loadOrderRoutes)
 
-	return router //test
+	return router //test for test
 }
 
 func loadOrderRoutes(router chi.Router) {
